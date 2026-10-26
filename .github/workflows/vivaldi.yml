@@ -72,25 +72,6 @@ jobs:
           [ -n "$VEXE" ] || { echo "vivaldi.exe not found"; find . | head -50; exit 1; }
           echo "SRC=$PWD/$(dirname "$VEXE")" >> "$GITHUB_ENV"
 
-      - name: Add Chrome++ (makes profile data portable across PCs)
-        if: steps.v.outputs.build == 'true'
-        run: |
-          # Chrome++ (github.com/Bush2021/chrome_plus, GPL-3.0) is a version.dll proxy that replaces
-          # Windows' per-PC password/cookie encryption key, so the profile works on any computer.
-          mkdir cpp
-          echo "Chrome++ assets:"
-          gh release view -R Bush2021/chrome_plus --json tagName,assets --jq '.tagName, (.assets[].name)'
-          gh release download -R Bush2021/chrome_plus -D cpp -p '*'
-          cd cpp
-          for z in *.zip; do [ -f "$z" ] && 7z x -y -o"x_${z%.zip}" "$z" >/dev/null || true; done
-          for z in *.7z; do [ -f "$z" ] && 7z x -y -o"x_${z%.7z}" "$z" >/dev/null || true; done
-          CAND=$(find . -type f -iname 'version*.dll' | grep -i 'x64' | grep -vi 'arm' | head -1 || true)
-          [ -n "$CAND" ] || CAND=$(find . -type f -iname '*.dll' | grep -i 'x64' | grep -vi 'arm' | head -1 || true)
-          [ -n "$CAND" ] || { echo "No x64 Chrome++ DLL found:"; find . -type f; exit 1; }
-          file "$CAND" | grep -qi 'x86-64' || { echo "Not a 64-bit DLL: $CAND"; file "$CAND"; exit 1; }
-          echo "Using $CAND"
-          echo "CPP_DLL=$PWD/$CAND" >> "$GITHUB_ENV"
-
       - name: Package
         if: steps.v.outputs.build == 'true'
         run: |
@@ -98,9 +79,8 @@ jobs:
           cp -r "$SRC"/. out/VivaldiPortable/App/
           cp vivaldi-portable.exe out/VivaldiPortable/
           echo "${{ steps.v.outputs.tag }}" > out/VivaldiPortable/App/version.txt
-          cp "$CPP_DLL" out/VivaldiPortable/App/version.dll
-          printf 'data_dir=%%app%%\\..\\Data\\profile\r\ncache_dir=%%app%%\\..\\Data\\cache\r\n' > out/VivaldiPortable/App/chrome++.ini
-          printf 'Includes Chrome++ (version.dll) from https://github.com/Bush2021/chrome_plus - GPL-3.0.\r\n' > out/VivaldiPortable/CHROME++-NOTICE.txt
+          [ -f version.dll ] || { echo 'version.dll missing from repo root'; exit 1; }
+          cp version.dll out/VivaldiPortable/App/version.dll
           cd out
           zip -r -9 -q ../VivaldiPortable-windows-x64.zip VivaldiPortable
           cd ..
