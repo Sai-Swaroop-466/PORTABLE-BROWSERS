@@ -72,7 +72,21 @@ func main() {
 	switch App {
 	case "vivaldi":
 		bin = filepath.Join(root, "App", "vivaldi.exe")
-		args = []string{"--user-data-dir=" + profile, "--disk-cache-dir=" + cache, "--no-default-browser-check"}
+		args = []string{
+			"--user-data-dir=" + profile,
+			"--disk-cache-dir=" + cache,
+			"--disable-encryption-win",
+			"--disable-encryption",
+			"--disable-machine-id",
+			"--password-store=basic",
+			"--disable-component-update",
+			"--disable-breakpad",
+			"--no-report-upload",
+			"--disable-logging",
+			"--disable-features=FlashDeprecationWarning,DefaultBrowserPrompt",
+			"--no-default-browser-check",
+			"--vivaldi-standalone",
+		}
 	default:
 		bin = filepath.Join(root, "App", "zen.exe")
 		up := filepath.Join(profile, "user.js")
