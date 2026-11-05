@@ -4,13 +4,13 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -131,78 +131,77 @@ func applyPending() {
 	logf("update applied")
 }
 
-type release struct {
-	Tag        string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
-	Assets     []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-	} `json:"assets"`
-}
-
 func readTrim(p string) string {
 	b, _ := os.ReadFile(p)
 	return strings.TrimSpace(string(b))
+}
+
+func assetName() string {
+	if App == "vivaldi" {
+		return "VivaldiPortable-windows-x64.zip"
+	}
+	return "ZenPortable-windows-x64.zip"
+}
+
+var tagRe = regexp.MustCompile(`/releases/tag/([^"<\s]+)`)
+
+// Reads the public releases feed (no API, no rate limit) and returns the newest tag for this app.
+func latestTag() (string, error) {
+	c := &http.Client{Timeout: 20 * time.Second}
+	resp, err := c.Get("https://github.com/" + Repo + "/releases.atom")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("feed status %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	for _, m := range tagRe.FindAllStringSubmatch(string(body), -1) {
+		if strings.HasPrefix(m[1], App+"-") {
+			return m[1], nil
+		}
+	}
+	return "", fmt.Errorf("no %s release in feed", App)
 }
 
 func checkForUpdate() {
 	if Repo == "" || exists(filepath.Join(data, "no-update")) {
 		return
 	}
-	stamp := filepath.Join(stage, "last_check")
-	if fi, err := os.Stat(stamp); err == nil && time.Since(fi.ModTime()) < 3*time.Hour {
-		return
-	}
-	client := &http.Client{Timeout: 30 * time.Minute}
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/"+Repo+"/releases?per_page=30", nil)
-	req.Header.Set("User-Agent", "portable-launcher")
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	cur := readTrim(filepath.Join(root, "App", "version.txt"))
+	tag, err := latestTag()
+	if err != nil {
 		logf("release check failed: %v", err)
 		return
 	}
-	var rels []release
-	err = json.NewDecoder(resp.Body).Decode(&rels)
-	resp.Body.Close()
+	logf("checked: latest=%s installed=%s", tag, cur)
+	if tag == cur || tag == readTrim(filepath.Join(stage, "App.new", "version.txt")) {
+		return
+	}
+
+	// only one launcher may download at a time (stale locks expire after 30 min)
+	lock := filepath.Join(stage, "lock")
+	if fi, err := os.Stat(lock); err == nil && time.Since(fi.ModTime()) > 30*time.Minute {
+		os.Remove(lock)
+	}
+	lf, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
-	os.WriteFile(stamp, []byte(time.Now().String()), 0o644)
+	lf.Close()
+	defer os.Remove(lock)
 
-	var rel *release
-	for i := range rels {
-		if !rels[i].Draft && strings.HasPrefix(rels[i].Tag, App+"-") {
-			rel = &rels[i]
-			break
-		}
-	}
-	if rel == nil {
-		return
-	}
-	if rel.Tag == readTrim(filepath.Join(root, "App", "version.txt")) ||
-		rel.Tag == readTrim(filepath.Join(stage, "App.new", "version.txt")) {
-		return
-	}
-	var zipURL, shaURL string
-	for _, a := range rel.Assets {
-		if strings.HasSuffix(a.Name, ".zip") {
-			zipURL = a.URL
-		} else if strings.HasSuffix(a.Name, ".zip.sha256") {
-			shaURL = a.URL
-		}
-	}
-	if zipURL == "" || shaURL == "" {
-		return
-	}
-	logf("new version %s found, downloading", rel.Tag)
+	client := &http.Client{Timeout: 30 * time.Minute}
+	zipURL := "https://github.com/" + Repo + "/releases/download/" + tag + "/" + assetName()
+	logf("new version %s found, downloading", tag)
 
-	// expected hash
-	r2, err := client.Get(shaURL)
-	if err != nil {
+	r2, err := client.Get(zipURL + ".sha256")
+	if err != nil || r2.StatusCode != 200 {
+		logf("hash file download failed: %v", err)
 		return
 	}
-	sb, _ := io.ReadAll(r2.Body)
+	sb, _ := io.ReadAll(io.LimitReader(r2.Body, 4096))
 	r2.Body.Close()
 	fields := strings.Fields(string(sb))
 	if len(fields) == 0 {
@@ -210,7 +209,6 @@ func checkForUpdate() {
 	}
 	want := strings.ToLower(fields[0])
 
-	// download + hash
 	pkg := filepath.Join(stage, "pkg.zip")
 	r3, err := client.Get(zipURL)
 	if err != nil || r3.StatusCode != 200 {
@@ -219,6 +217,7 @@ func checkForUpdate() {
 	}
 	out, err := os.Create(pkg)
 	if err != nil {
+		r3.Body.Close()
 		return
 	}
 	h := sha256.New()
@@ -231,7 +230,6 @@ func checkForUpdate() {
 		return
 	}
 
-	// extract App/ only
 	tmp := filepath.Join(stage, "App.tmp")
 	if err := extractApp(pkg, tmp); err != nil || !exists(filepath.Join(tmp, "version.txt")) {
 		logf("extract failed: %v", err)
@@ -245,7 +243,7 @@ func checkForUpdate() {
 		return
 	}
 	os.Remove(pkg)
-	logf("%s staged; will apply on next launch", rel.Tag)
+	logf("%s staged; will apply on next launch", tag)
 }
 
 func extractApp(zipPath, dest string) error {
