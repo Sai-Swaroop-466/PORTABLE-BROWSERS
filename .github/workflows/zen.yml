@@ -2,7 +2,7 @@ name: Build Zen Portable
 
 on:
   schedule:
-    - cron: "7 * * * *"   # every hour
+    - cron: "7,37 * * * *"   # twice an hour (GitHub may skip some)
   workflow_dispatch:
     inputs:
       force:
@@ -12,6 +12,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: zen-build
+  cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
