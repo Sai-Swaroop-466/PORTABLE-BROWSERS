@@ -2,7 +2,7 @@ name: Build Vivaldi Portable
 
 on:
   schedule:
-    - cron: "37 * * * *"   # every hour
+    - cron: "22,52 * * * *"   # twice an hour (GitHub may skip some)
   workflow_dispatch:
     inputs:
       force:
@@ -12,6 +12,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: vivaldi-build
+  cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
