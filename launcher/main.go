@@ -75,11 +75,11 @@ func main() {
 		args = []string{
 			"--user-data-dir=" + profile,
 			"--disk-cache-dir=" + cache,
+			"--disk-cache-size=52428800",
 			"--disable-encryption-win",
 			"--disable-encryption",
 			"--disable-machine-id",
 			"--password-store=basic",
-			"--disable-component-update",
 			"--disable-breakpad",
 			"--no-report-upload",
 			"--disable-logging",
